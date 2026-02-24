@@ -37,3 +37,30 @@ __pycache__/
 # Model files
 ggml-model-f16.bin
 *.bat
+
+*.gguf
+*.log
+mnn_cifar/
+
+# Android Studio / CMake junk
+**/.cxx/
+**/.gradle/
+**/build/
+**/build_test/
+**/CMakeFiles/
+local.properties
+*.apk
+
+# Training and models
+**/data/
+**/models/
+
+# Junk files
+benchmark_output.txt
+extract_cifar.py
+*.jar
+*.bin
+a.out
+
+# Nested repositories / Large dependencies
+llama_cpp/
