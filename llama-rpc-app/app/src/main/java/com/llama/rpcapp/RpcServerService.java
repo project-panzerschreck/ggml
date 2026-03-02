@@ -27,37 +27,105 @@ public class RpcServerService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String host = intent.getStringExtra("host");
-        if (host == null) host = "0.0.0.0";
-        int port = intent.getIntExtra("port", 50052);
-        int threads = intent.getIntExtra("threads", 4);
+        final String host = intent.getStringExtra("host") != null ? intent.getStringExtra("host") : "0.0.0.0";        final int port = intent.getIntExtra("port", 50052);
+        final String discoveryIp = intent.getStringExtra("discoveryIp");
+        final int discoveryPort = intent.getIntExtra("discoveryPort", 50055);
+        final int threads = intent.getIntExtra("threads", 4);
+
+        if (discoveryIp == null) {
+            Log.w(TAG, "No discoveryIp provided. Discovery ping will not start.");
+        }
+
+        final String displayHost = host.equals("0.0.0.0") ? getLocalIpAddress() : host;
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Llama RPC Server")
-                .setContentText("Running on " + host + ":" + port)
+                .setContentText("Running on " + displayHost + ":" + port)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .build();
 
         startForeground(1, notification);
 
-        String finalHost = host;
         serverThread = new Thread(() -> {
-            Log.i(TAG, "Starting RPC server thread...");
-            nativeServer.startServer(finalHost, port, threads);
-            Log.i(TAG, "RPC server thread finished.");
-            stopSelf();
+            try {
+                Log.i(TAG, "Starting RPC server thread on " + host + ":" + port);
+                if (discoveryIp != null) {
+                    startDiscoveryPing(discoveryIp, discoveryPort, port);
+                }
+                nativeServer.startServer(host, port, threads);
+                Log.i(TAG, "RPC server thread finished.");
+            } catch (Throwable t) {
+                Log.e(TAG, "FATAL: RPC server thread crashed", t);
+            } finally {
+                isRunning = false;
+                stopSelf();
+            }
         });
         serverThread.start();
 
         return START_NOT_STICKY;
     }
 
+    private String getLocalIpAddress() {
+        try {
+            for (java.util.Enumeration<java.net.NetworkInterface> en = java.net.NetworkInterface.getNetworkInterfaces(); en.hasMoreElements(); ) {
+                java.net.NetworkInterface intf = en.nextElement();
+                if (!intf.getName().contains("wlan")) continue;
+                for (java.util.Enumeration<java.net.InetAddress> enumIpAddr = intf.getInetAddresses(); enumIpAddr.hasMoreElements(); ) {
+                    java.net.InetAddress inetAddress = enumIpAddr.nextElement();
+                    if (!inetAddress.isLoopbackAddress() && inetAddress instanceof java.net.Inet4Address) {
+                        Log.i(TAG, "Found IP via NetworkInterface (" + intf.getName() + "): " + inetAddress.getHostAddress());
+                        return inetAddress.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            Log.e(TAG, "IP Address error", ex);
+        }
+        return "0.0.0.0";
+    }
+
+    //discovery logic
+    private Thread discoveryThread;
+    private volatile boolean isRunning = false;
+
+    private void startDiscoveryPing(String targetIp, int targetPort, int servicePort) {
+        isRunning = true;
+        discoveryThread = new Thread(() -> {
+            try (java.net.DatagramSocket socket = new java.net.DatagramSocket()) {
+                java.net.InetAddress hostAddress = java.net.InetAddress.getByName(targetIp);
+                String message = "llama-rpc-ping:" + servicePort;
+                byte[] buf = message.getBytes();
+                java.net.DatagramPacket packet = new java.net.DatagramPacket(buf, buf.length, hostAddress, targetPort);
+
+                while (isRunning) {
+                    try {
+                        socket.send(packet);
+                        Log.d(TAG, "Sent discovery ping to " + hostAddress.getHostAddress() + ":" + targetPort);
+                        Thread.sleep(2000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error sending discovery ping", e);
+                        Thread.sleep(5000);
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to initialize discovery thread", e);
+            }
+        });
+        discoveryThread.start();
+    }
+
     @Override
     public void onDestroy() {
         super.onDestroy();
         Log.i(TAG, "Service destroyed. Note: ggml-rpc server might not stop cleanly without process kill.");
-        // RPC server in llama_cpp is currently blocking and doesn't have a clean stop API easily accessible via JNI
-        // In a real app, we might need to kill the process to restart.
+        isRunning = false;
+        if (discoveryThread != null) {
+            discoveryThread.interrupt();
+        }
     }
 
     @Nullable

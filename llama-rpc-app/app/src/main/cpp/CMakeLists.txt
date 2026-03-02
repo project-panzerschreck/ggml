@@ -22,5 +22,6 @@ target_include_directories(llama-rpc PRIVATE
 target_link_libraries(llama-rpc
         llama
         ggml
+        ggml-cpu
         android
         log)

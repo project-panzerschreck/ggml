@@ -18,7 +18,7 @@ import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
     private TextView tvIpAddress;
-    private EditText etPort, etThreads;
+    private EditText etPort, etThreads, etHost, etDiscoveryIp, etDiscoveryPort;
     private Button btnStart, btnStop;
     private boolean isRunning = false;
 
@@ -28,7 +28,10 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         tvIpAddress = findViewById(R.id.tvIpAddress);
+        etHost = findViewById(R.id.etHost);
         etPort = findViewById(R.id.etPort);
+        etDiscoveryIp = findViewById(R.id.etDiscoveryIp);
+        etDiscoveryPort = findViewById(R.id.etDiscoveryPort);
         etThreads = findViewById(R.id.etThreads);
         btnStart = findViewById(R.id.btnStart);
         btnStop = findViewById(R.id.btnStop);
@@ -52,12 +55,17 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startRpcService() {
+        String host = etHost.getText().toString();
         int port = Integer.parseInt(etPort.getText().toString());
+        String discoveryIp = etDiscoveryIp.getText().toString();
+        int discoveryPort = Integer.parseInt(etDiscoveryPort.getText().toString());
         int threads = Integer.parseInt(etThreads.getText().toString());
 
         Intent serviceIntent = new Intent(this, RpcServerService.class);
-        serviceIntent.putExtra("host", "0.0.0.0");
+        serviceIntent.putExtra("host", host);
         serviceIntent.putExtra("port", port);
+        serviceIntent.putExtra("discoveryIp", discoveryIp);
+        serviceIntent.putExtra("discoveryPort", discoveryPort);
         serviceIntent.putExtra("threads", threads);
 
         ContextCompat.startForegroundService(this, serviceIntent);

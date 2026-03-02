@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.llama.rpcapp"
-        minSdk = 26
+        minSdk = 23
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -18,6 +18,8 @@ android {
         
         ndk {
             abiFilters.add("arm64-v8a")
+            abiFilters.add("x86_64")
+            abiFilters.add("armeabi-v7a")
         }
 
         externalNativeBuild {

@@ -63,4 +63,7 @@ extract_cifar.py
 a.out
 
 # Nested repositories / Large dependencies
-llama_cpp/
+# llama_cpp/
+
+# ADB platform-tools
+platform-tools/

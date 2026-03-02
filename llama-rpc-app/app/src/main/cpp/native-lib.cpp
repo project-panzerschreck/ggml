@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <android/log.h>
+#include <unistd.h>
 #include "ggml.h"
 #include "ggml-rpc.h"
 
@@ -32,8 +33,6 @@ Java_com_llama_rpcapp_NativeRpcServer_startServer(
     
     const char *native_host = env->GetStringUTFChars(host, 0);
     std::string endpoint = std::string(native_host) + ":" + std::to_string(port);
-    
-    LOGI("Starting RPC server on %s with %d threads", endpoint.c_str(), n_threads);
     
     ggml_log_set(ggml_log_callback_android, nullptr);
     ggml_backend_load_all();
@@ -72,8 +71,13 @@ Java_com_llama_rpcapp_NativeRpcServer_startServer(
         return;
     }
 
-    // This call is blocking
-    start_server_fn(endpoint.c_str(), nullptr, (size_t)n_threads, devices.size(), devices.data());
+    // restart if failed
+    while (true) {
+        LOGI("Invoking start_server_fn...");
+        start_server_fn(endpoint.c_str(), nullptr, (size_t)n_threads, devices.size(), devices.data());
+        LOGE("start_server_fn returned! Waiting 5 seconds before retry...");
+        sleep(5);
+    }
     
     env->ReleaseStringUTFChars(host, native_host);
     LOGI("RPC server stopped");
