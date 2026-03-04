@@ -28,20 +28,25 @@ struct InferenceView: View {
     @State private var localModels: [URL] = []
 
     // ── RPC worker state ──────────────────────────────────────────────────────
+    @AppStorage("rpcHost") private var rpcHost: String = "0.0.0.0"
     @AppStorage("rpcPort") private var rpcPort: Int = 50052
+    @AppStorage("rpcDiscoveryIp") private var rpcDiscoveryIp: String = "255.255.255.255"
+    @AppStorage("rpcDiscoveryPort") private var rpcDiscoveryPort: Int = 50055
+    @AppStorage("rpcThreads") private var rpcThreads: Int = 4
+    
     @State private var serverURL:  String = ""
-    @State private var showRPC:    Bool   = false
+    @State private var showRPC:    Bool   = true
 
     // ── Body ──────────────────────────────────────────────────────────────────
 
     var body: some View {
         NavigationStack {
             List {
-                modelSection
-                if case .ready = engine.modelState {
-                    generationSection
-                    outputSection
-                }
+                // modelSection
+                // if case .ready = engine.modelState {
+                //     generationSection
+                //     outputSection
+                // }
                 rpcWorkerSection
             }
             .navigationTitle("GGML Inference")
@@ -177,7 +182,7 @@ struct InferenceView: View {
     @ViewBuilder
     private var rpcWorkerSection: some View {
         Section {
-            Toggle("RPC Worker mode", isOn: $showRPC)
+            // Toggle("RPC Worker mode", isOn: $showRPC)
         } header: {
             Text("GGML RPC Backend")
         } footer: {
@@ -227,8 +232,26 @@ struct InferenceView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                LabeledContent("Thread count") {
+                    Stepper(String(rpcThreads), value: $rpcThreads, in: 1...64, step: 1)
+                        .disabled(isRunning)
+                }
+                LabeledContent("Host") {
+                    TextField("0.0.0.0", text: $rpcHost)
+                        .disabled(isRunning)
+                        .multilineTextAlignment(.trailing)
+                }
                 LabeledContent("Port") {
                     Stepper(String(rpcPort), value: $rpcPort, in: 1024...65535, step: 1)
+                        .disabled(isRunning)
+                }
+                LabeledContent("Discovery IP") {
+                    TextField("255.255.255.255", text: $rpcDiscoveryIp)
+                        .disabled(isRunning)
+                        .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("Discovery Port") {
+                    Stepper(String(rpcDiscoveryPort), value: $rpcDiscoveryPort, in: 1024...65535, step: 1)
                         .disabled(isRunning)
                 }
             }
@@ -250,7 +273,13 @@ struct InferenceView: View {
                     .tint(.red)
                 } else {
                     Button {
-                        engine.startRPCServer(port: rpcPort)
+                        engine.startRPCServer(
+                            host: rpcHost,
+                            port: rpcPort,
+                            discoveryIp: rpcDiscoveryIp,
+                            discoveryPort: rpcDiscoveryPort,
+                            threads: rpcThreads
+                        )
                     } label: {
                         Label(
                             engine.rpcServerState == .starting ? "Starting…" : "Start RPC server",

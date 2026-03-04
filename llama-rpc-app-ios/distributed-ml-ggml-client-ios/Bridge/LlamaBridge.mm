@@ -410,7 +410,8 @@ typedef NS_ENUM(NSInteger, LlamaBridgeError) {
 - (void)startRPCServer:(NSString *)endpoint
               cacheDir:(nullable NSString *)cacheDir
                 freeMB:(NSUInteger)freeMB
-               totalMB:(NSUInteger)totalMB {
+               totalMB:(NSUInteger)totalMB
+               threads:(NSUInteger)threads {
 #if !GGML_RPC_AVAILABLE
     NSLog(@"[LlamaBridge] RPC server not available – rebuild with GGML_RPC=ON (see scripts/build-ggml-ios.sh)");
     return;
@@ -431,7 +432,7 @@ typedef NS_ENUM(NSInteger, LlamaBridgeError) {
     size_t free_b    = freeMB  * 1024 * 1024;
     size_t total_b   = totalMB * 1024 * 1024;
 
-    NSLog(@"[LlamaBridge] Starting GGML RPC server at %@ …", endpoint);
+    NSLog(@"[LlamaBridge] Starting GGML RPC server at %@ with %lu threads…", endpoint, (unsigned long)threads);
     // Blocks until the server is stopped externally (process kill or socket close).
     ggml_backend_rpc_start_server(backend, ep, cdir, free_b, total_b);
     NSLog(@"[LlamaBridge] GGML RPC server stopped.");

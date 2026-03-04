@@ -141,7 +141,8 @@ typedef void (^LlamaShardCallback)(NSData *hiddenState,
 - (void)startRPCServer:(NSString *)endpoint
               cacheDir:(nullable NSString *)cacheDir
                 freeMB:(NSUInteger)freeMB
-               totalMB:(NSUInteger)totalMB;
+               totalMB:(NSUInteger)totalMB
+               threads:(NSUInteger)threads;
 
 // ─ Distributed inference stubs ───────────────────────────────────────────────
 //

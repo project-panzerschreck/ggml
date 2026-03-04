@@ -13,6 +13,7 @@
 
 import Foundation
 import Combine
+import Network
 
 // ── Generation result ─────────────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ final class InferenceEngine: ObservableObject {
     private var generationTask: Task<Void, Never>?
     private var rpcServerTask:  Task<Void, Never>?
     private var keepaliveTask:  Task<Void, Never>?
+    private var discoveryTask:  Task<Void, Never>?
 
     static let shared = InferenceEngine()
 
@@ -181,10 +183,18 @@ final class InferenceEngine: ObservableObject {
     /// coordinates inference itself.
     ///
     /// - Parameter port: TCP port to listen on (default 50052, same as Android team).
-    func startRPCServer(port: Int = 50052) {
+    func startRPCServer(
+        host: String = "0.0.0.0",
+        port: Int = 50052,
+        discoveryIp: String = "255.255.255.255",
+        discoveryPort: Int = 50055,
+        threads: Int = 4
+    ) {
         guard case .idle = rpcServerState else { return }
-        let endpoint = "0.0.0.0:\(port)"
+        let endpoint = "\(host):\(port)"
         rpcServerState = .starting
+        
+        startDiscoveryPing(discoveryIp: discoveryIp, discoveryPort: discoveryPort, servicePort: port)
 
         rpcServerTask = Task.detached(priority: .userInitiated) { [bridge] in
             if !LlamaBridge.rpcAvailable() {
@@ -198,7 +208,7 @@ final class InferenceEngine: ObservableObject {
             let (freeMB, totalMB) = Self.deviceMemoryMB()
             await MainActor.run { self.rpcServerState = .running(endpoint: endpoint) }
             // Blocking call – returns only when the server socket is closed.
-            bridge.startRPCServer(endpoint, cacheDir: nil, freeMB: freeMB, totalMB: totalMB)
+            bridge.startRPCServer(endpoint, cacheDir: nil, freeMB: freeMB, totalMB: totalMB, threads: UInt(threads))
             await MainActor.run { self.rpcServerState = .idle }
         }
     }
@@ -221,7 +231,36 @@ final class InferenceEngine: ObservableObject {
         rpcServerTask?.cancel()
         rpcServerTask = nil
         stopKeepalive()
+        stopDiscoveryPing()
         rpcServerState = .idle
+    }
+    
+    // ── UDP Discovery Ping ────────────────────────────────────────────────────
+    
+    private func startDiscoveryPing(discoveryIp: String, discoveryPort: Int, servicePort: Int) {
+        stopDiscoveryPing()
+        discoveryTask = Task.detached {
+            guard let port = NWEndpoint.Port(rawValue: UInt16(discoveryPort)) else { return }
+            let connection = NWConnection(
+                host: NWEndpoint.Host(discoveryIp),
+                port: port,
+                using: .udp
+            )
+            connection.start(queue: .global())
+            let pingString = "llama-rpc-ping:\(servicePort)"
+            guard let pingData = pingString.data(using: .utf8) else { return }
+            
+            while !Task.isCancelled {
+                connection.send(content: pingData, completion: .contentProcessed({ _ in }))
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+            connection.cancel()
+        }
+    }
+
+    private func stopDiscoveryPing() {
+        discoveryTask?.cancel()
+        discoveryTask = nil
     }
 
     // ── Server registration / keepalive ──────────────────────────────────────
