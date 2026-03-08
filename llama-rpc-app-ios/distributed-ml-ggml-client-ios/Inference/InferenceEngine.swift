@@ -240,21 +240,29 @@ final class InferenceEngine: ObservableObject {
     private func startDiscoveryPing(discoveryIp: String, discoveryPort: Int, servicePort: Int) {
         stopDiscoveryPing()
         discoveryTask = Task.detached {
-            guard let port = NWEndpoint.Port(rawValue: UInt16(discoveryPort)) else { return }
-            let connection = NWConnection(
-                host: NWEndpoint.Host(discoveryIp),
-                port: port,
-                using: .udp
-            )
-            connection.start(queue: .global())
-            let pingString = "llama-rpc-ping:\(servicePort)"
-            guard let pingData = pingString.data(using: .utf8) else { return }
+            let urlString = "http://\(discoveryIp):\(discoveryPort)/announce?port=\(servicePort)"
+            guard let url = URL(string: urlString) else { return }
             
             while !Task.isCancelled {
-                connection.send(content: pingData, completion: .contentProcessed({ _ in }))
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                do {
+                    var req = URLRequest(url: url)
+                    req.httpMethod = "GET"
+                    req.timeoutInterval = 5
+                    
+                    let (data, response) = try await URLSession.shared.data(for: req)
+                    
+                    if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let interval = json["interval"] as? Double {
+                        try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                    } else {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                } catch {
+                    if error is CancellationError { break }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
             }
-            connection.cancel()
         }
     }
 

@@ -92,27 +92,41 @@ public class RpcServerService extends Service {
     private void startDiscoveryPing(String targetIp, int targetPort, int servicePort) {
         isRunning = true;
         discoveryThread = new Thread(() -> {
-            try (java.net.DatagramSocket socket = new java.net.DatagramSocket()) {
-                java.net.InetAddress hostAddress = java.net.InetAddress.getByName(targetIp);
-                String message = "llama-rpc-ping:" + servicePort;
-                byte[] buf = message.getBytes();
-                java.net.DatagramPacket packet = new java.net.DatagramPacket(buf, buf.length, hostAddress, targetPort);
+            String urlString = "http://" + targetIp + ":" + targetPort + "/announce?port=" + servicePort;
+            while (isRunning) {
+                try {
+                    java.net.URL url = new java.net.URL(urlString);
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(5000);
 
-                while (isRunning) {
+                    int responseCode = conn.getResponseCode();
+                    if (responseCode == java.net.HttpURLConnection.HTTP_OK) {
+                        java.io.InputStream in = conn.getInputStream();
+                        java.util.Scanner scanner = new java.util.Scanner(in).useDelimiter("\\A");
+                        String responseBody = scanner.hasNext() ? scanner.next() : "";
+                        org.json.JSONObject json = new org.json.JSONObject(responseBody);
+                        int interval = json.getInt("interval");
+                        Log.d(TAG, "Announced to tracker, reannouncing in " + interval + " seconds");
+                        Thread.sleep(interval * 1000L);
+                    } else {
+                        Log.e(TAG, "Failed to announce to tracker, response code: " + responseCode);
+                        Thread.sleep(1000);
+                    }
+                    conn.disconnect();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    Log.e(TAG, "Error in discovery thread", e);
                     try {
-                        socket.send(packet);
-                        Log.d(TAG, "Sent discovery ping to " + hostAddress.getHostAddress() + ":" + targetPort);
-                        Thread.sleep(2000);
-                    } catch (InterruptedException e) {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         break;
-                    } catch (Exception e) {
-                        Log.e(TAG, "Error sending discovery ping", e);
-                        Thread.sleep(5000);
                     }
                 }
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to initialize discovery thread", e);
             }
         });
         discoveryThread.start();
