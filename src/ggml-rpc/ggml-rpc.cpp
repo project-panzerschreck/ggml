@@ -415,13 +415,11 @@ static bool recv_data(sockfd_t sockfd, void * data, size_t size) {
 }
 
 static bool send_msg(sockfd_t sockfd, const void * msg, size_t msg_size) {
-    uint64_t size_64 = msg_size;
-    if (!send_data(sockfd, &size_64, sizeof(size_64))) {
+    if (!send_data(sockfd, &msg_size, sizeof(msg_size))) {
         return false;
     }
     return send_data(sockfd, msg, msg_size);
 }
-
 
 static bool recv_msg(sockfd_t sockfd, void * msg, size_t msg_size) {
     uint64_t size;
