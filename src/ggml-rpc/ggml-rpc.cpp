@@ -30,6 +30,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <atomic>
 
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
@@ -61,6 +62,8 @@ struct socket_t {
 #endif
     }
 };
+
+static std::atomic<sockfd_t> g_server_sockfd{-1};
 
 // macro for nicer error messages on server crash
 #define RPC_STATUS_ASSERT(x) if (!(x)) GGML_ABORT("Remote RPC server crashed or returned malformed response")
@@ -314,6 +317,32 @@ static bool set_reuse_addr(sockfd_t sockfd) {
     return ret == 0;
 }
 
+// Set a 30-second send/receive timeout so that a non-responsive RPC server
+// (one that accepts the TCP connection but never replies to HELLO or any
+// subsequent command) does not block llama-server indefinitely.
+static bool set_rpc_timeout(sockfd_t sockfd) {
+#ifndef _WIN32
+    struct timeval tv;
+    tv.tv_sec  = 30;
+    tv.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        return false;
+    }
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+        return false;
+    }
+#else
+    DWORD timeout_ms = 30000;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms)) < 0) {
+        return false;
+    }
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms)) < 0) {
+        return false;
+    }
+#endif
+    return true;
+}
+
 static std::shared_ptr<socket_t> socket_connect(const char * host, int port) {
     struct sockaddr_in addr;
     auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -336,6 +365,11 @@ static std::shared_ptr<socket_t> socket_connect(const char * host, int port) {
     if (connect(sock_ptr->fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         return nullptr;
     }
+    // Apply per-operation timeout AFTER the connection is established so that
+    // connect() itself is not affected (it uses a separate timeout path).
+    if (!set_rpc_timeout(sock_ptr->fd)) {
+        GGML_LOG_WARN("[ggml-rpc] failed to set socket timeout for %s:%d\n", host, port);
+    }
     return sock_ptr;
 }
 
@@ -356,12 +390,19 @@ static std::shared_ptr<socket_t> create_server_socket(const char * host, int por
     auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
     auto sock = make_socket(sockfd);
     if (sock == nullptr) {
+        perror("Failed to make socket");
         return nullptr;
     }
     if (!set_reuse_addr(sockfd)) {
         GGML_LOG_ERROR("Failed to set SO_REUSEADDR\n");
         return nullptr;
     }
+#ifdef SO_REUSEPORT
+    int flag = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, (char *)&flag, sizeof(int)) < 0) {
+        perror("Failed to set SO_REUSEPORT");
+    }
+#endif
     if (inet_addr(host) == INADDR_NONE) {
         GGML_LOG_ERROR("Invalid host address: %s\n", host);
         return nullptr;
@@ -372,9 +413,11 @@ static std::shared_ptr<socket_t> create_server_socket(const char * host, int por
     serv_addr.sin_port = htons(port);
 
     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
+        perror("Failed to bind");
         return nullptr;
     }
     if (listen(sockfd, 1) < 0) {
+        perror("Failed to listen");
         return nullptr;
     }
     return sock;
@@ -498,7 +541,14 @@ static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cm
 static bool check_server_version(const std::shared_ptr<socket_t> & sock) {
     rpc_msg_hello_rsp response;
     bool status = send_rpc_cmd(sock, RPC_CMD_HELLO, nullptr, 0, &response, sizeof(response));
-    RPC_STATUS_ASSERT(status);
+    if (!status) {
+        // Connection dropped or truncated response (e.g. stale socket, version
+        // mismatch in framing, or 30-second receive timeout hit).  Return false
+        // so get_socket() returns nullptr and the endpoint is skipped rather
+        // than aborting the whole process.
+        GGML_LOG_ERROR("[ggml-rpc] HELLO exchange failed - skipping endpoint\n");
+        return false;
+    }
     if (response.major != RPC_PROTO_MAJOR_VERSION || response.minor > RPC_PROTO_MINOR_VERSION) {
         GGML_LOG_ERROR("RPC server version mismatch: %d.%d.%d\n", response.major, response.minor, response.patch);
         return false;
@@ -1881,6 +1931,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         fprintf(stderr, "Failed to create server socket\n");
         return;
     }
+    g_server_sockfd.store(server_socket->fd, std::memory_order_release);
     while (true) {
         auto client_socket = socket_accept(server_socket->fd);
         if (client_socket == nullptr) {
@@ -1898,6 +1949,19 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
 #endif
     for (auto backend : backends) {
         ggml_backend_free(backend);
+    }
+    g_server_sockfd.store(-1, std::memory_order_release);
+}
+
+void ggml_backend_rpc_stop_server(void) {
+    sockfd_t fd = g_server_sockfd.exchange(-1, std::memory_order_acq_rel);
+    if (fd != -1) {
+        LOG_DBG("[%s] safely closing server socket %d\n", __func__, fd);
+#ifdef _WIN32
+        closesocket(fd);
+#else
+        close(fd);
+#endif
     }
 }
 
